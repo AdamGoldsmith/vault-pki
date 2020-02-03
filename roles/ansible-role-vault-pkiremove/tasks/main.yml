@@ -1,0 +1,24 @@
+---
+
+- name: Disable PKI engines
+  vars:
+    admin_keys: "{{ lookup('file', vault_admintokenfile) | from_json }}"
+    pki_engines:
+      - "pki"
+      - "pki_int"
+  uri:
+    url: "https://{{ vault_addr }}:{{ vault_port }}/v1/sys/mounts/{{ item }}"
+    validate_certs: no
+    method: DELETE
+    headers:
+      X-Vault-Token: "{{ admin_keys['auth']['client_token'] }}"
+    body_format: json
+    return_content: yes
+    status_code: 204
+  loop: "{{ pki_engines }}"
+  no_log: yes
+#  register: result
+#  # Don't fail if "path is already in use at" message appears
+#  failed_when: "result.status != 204 and 'path is already in use at ' not in result.content"
+  run_once: yes
+

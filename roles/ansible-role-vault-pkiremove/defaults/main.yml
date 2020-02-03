@@ -1,0 +1,5 @@
+---
+
+vault_admintokenfile: "~/.hashicorp_admin_token.json"
+vault_addr: "10.1.42.10"
+vault_port: "8200"

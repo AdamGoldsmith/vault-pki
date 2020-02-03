@@ -1,0 +1,11 @@
+---
+
+vault_admintokenfile: "~/.hashicorp_admin_token.json"
+vault_addr: "10.1.42.10"
+vault_port: "8200"
+pki_max_lease_ttl: "87600h"
+pki_int_max_lease_ttl: "43800h"
+common_name: "common.com"
+ca_ttl: "87600h"
+role_max_ttl: "720h"
+sub_domain_ttl: "24h"

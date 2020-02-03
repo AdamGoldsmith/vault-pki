@@ -1,0 +1,19 @@
+---
+
+- name: Configure Vault PKI
+  hosts: vault
+  gather_facts: no
+
+  roles:
+
+    - name: Configure PKI
+      role: ansible-role-vault-pki
+      tags:
+        - 'pki'
+
+    - name: Remove PKI config
+      role: ansible-role-vault-pkiremove
+      tags:
+        - 'never'
+        - 'remove'
+

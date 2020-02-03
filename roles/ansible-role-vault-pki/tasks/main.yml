@@ -1,0 +1,211 @@
+---
+
+- name: Create PKI admin policy
+  vars:
+    admin_keys: "{{ lookup('file', vault_admintokenfile) | from_json }}"
+  uri:
+    url: "https://{{ vault_addr }}:{{ vault_port }}/v1/sys/policy/pki"
+    validate_certs: no
+    method: PUT
+    headers:
+      X-Vault-Token: "{{ admin_keys['auth']['client_token'] }}"
+    body: { "policy": "{{ lookup('file', 'policy-pki.hcl') }}" }
+    body_format: json
+    return_content: yes
+    status_code: 204
+  no_log: yes
+  run_once: yes
+
+- name: Create PKI management token
+  vars:
+    admin_keys: "{{ lookup('file', vault_admintokenfile) | from_json }}"
+  uri:
+    url: "https://{{ vault_addr }}:{{ vault_port }}/v1/auth/token/create"
+    validate_certs: no
+    method: POST
+    headers:
+      X-Vault-Token: "{{ admin_keys['auth']['client_token'] }}"
+    body: '{ "policies": "pki" }'
+    body_format: json
+    return_content: yes
+    status_code: 200
+  no_log: yes
+  register: pki_token
+  run_once: yes
+
+- name: Enable PKI engine
+  uri:
+    url: "https://{{ vault_addr }}:{{ vault_port }}/v1/sys/mounts/pki"
+    validate_certs: no
+    method: POST
+    headers:
+      X-Vault-Token: "{{ pki_token['json']['auth']['client_token'] }}"
+    body: '{ "type": "pki" }'
+    body_format: json
+    return_content: yes
+    status_code: 204
+  no_log: yes
+  register: result
+  # Don't fail if "path is already in use at" message appears
+  failed_when: "result.status != 204 and 'path is already in use at ' not in result.content"
+  run_once: yes
+
+- name: Tune PKI engine
+  uri:
+    url: "https://{{ vault_addr }}:{{ vault_port }}/v1/sys/mounts/pki/tune"
+    validate_certs: no
+    method: POST
+    headers:
+      X-Vault-Token: "{{ pki_token['json']['auth']['client_token'] }}"
+    body: "{{ lookup('template', 'pki_tune.json.j2') }}"
+    body_format: json
+    return_content: yes
+    status_code: 204
+  no_log: yes
+  register: result
+  # Don't fail if "existing mount at" message appears
+  failed_when: "result.status != 204 and 'existing mount at ' not in result.content"
+  run_once: yes
+
+- name: Generate CA root certificate
+  uri:
+    url: "https://{{ vault_addr }}:{{ vault_port }}/v1/pki/root/generate/internal"
+    validate_certs: no
+    method: POST
+    headers:
+      X-Vault-Token: "{{ pki_token['json']['auth']['client_token'] }}"
+    body: "{{ lookup('template', 'root_ca_cert.json.j2') }}"
+    body_format: json
+    return_content: yes
+    status_code: 200
+  no_log: yes
+  register: ca_cert
+  run_once: yes
+
+# TODO: Add step to handle idempotency of existing root CA certificate
+
+- name: Configure CA & CRL URLs
+  uri:
+    url: "https://{{ vault_addr }}:{{ vault_port }}/v1/pki/config/urls"
+    validate_certs: no
+    method: POST
+    headers:
+      X-Vault-Token: "{{ pki_token['json']['auth']['client_token'] }}"
+    body: "{{ lookup('template', 'ca_crl_urls.json.j2') }}"
+    body_format: json
+    return_content: yes
+    status_code: 204
+  no_log: yes
+  run_once: yes
+
+- name: Enable intermediate PKI engine
+  uri:
+    url: "https://{{ vault_addr }}:{{ vault_port }}/v1/sys/mounts/pki_int"
+    validate_certs: no
+    method: POST
+    headers:
+      X-Vault-Token: "{{ pki_token['json']['auth']['client_token'] }}"
+    body: '{ "type": "pki" }'
+    body_format: json
+    return_content: yes
+    status_code: 204
+  no_log: yes
+  register: result
+  # Don't fail if "path is already in use at" message appears
+  failed_when: "result.status != 204 and 'path is already in use at ' not in result.content"
+  run_once: yes
+
+- name: Tune intermediate PKI engine
+  uri:
+    url: "https://{{ vault_addr }}:{{ vault_port }}/v1/sys/mounts/pki_int/tune"
+    validate_certs: no
+    method: POST
+    headers:
+      X-Vault-Token: "{{ pki_token['json']['auth']['client_token'] }}"
+    body: "{{ lookup('template', 'pki_int_tune.json.j2') }}"
+    body_format: json
+    return_content: yes
+    status_code: 204
+  no_log: yes
+  register: result
+  # Don't fail if "existing mount at" message appears
+  failed_when: "result.status != 204 and 'existing mount at ' not in result.content"
+  run_once: yes
+
+- name: Generate intermediate CSR
+  uri:
+    url: "https://{{ vault_addr }}:{{ vault_port }}/v1/pki_int/intermediate/generate/internal"
+    validate_certs: no
+    method: POST
+    headers:
+      X-Vault-Token: "{{ pki_token['json']['auth']['client_token'] }}"
+    body: "{{ lookup('template', 'int_cert.json.j2') }}"
+    body_format: json
+    return_content: yes
+    status_code: 200
+  no_log: yes
+  register: int_csr
+  run_once: yes
+
+- name: Sign intermediate CSR
+  vars:
+    csr: "{{ int_csr['json']['data']['csr'] | replace('\n', '\\n') }}"
+  uri:
+    url: "https://{{ vault_addr }}:{{ vault_port }}/v1/pki/root/sign-intermediate"
+    validate_certs: no
+    method: POST
+    headers:
+      X-Vault-Token: "{{ pki_token['json']['auth']['client_token'] }}"
+    body: "{{ lookup('template', 'sign_csr.json.j2') }}"
+    body_format: json
+    return_content: yes
+    status_code: 200
+  no_log: yes
+  register: int_cert
+  run_once: yes
+
+- name: Import intermediate certificate into Vault
+  vars:
+    cert: "{{ int_cert['json']['data']['certificate'] | replace('\n', '\\n') }}"
+  uri:
+    url: "https://{{ vault_addr }}:{{ vault_port }}/v1/pki_int/intermediate/set-signed"
+    validate_certs: no
+    method: POST
+    headers:
+      X-Vault-Token: "{{ pki_token['json']['auth']['client_token'] }}"
+    body: '{ "certificate": "{{ cert }}" }'
+    body_format: json
+    return_content: yes
+    status_code: 204
+  no_log: yes
+  run_once: yes
+
+- name: Create domain role
+  uri:
+    url: "https://{{ vault_addr }}:{{ vault_port }}/v1/pki_int/roles/{{ common_name | replace('.', '-dot-') }}"
+    validate_certs: no
+    method: POST
+    headers:
+      X-Vault-Token: "{{ pki_token['json']['auth']['client_token'] }}"
+    body: "{{ lookup('template', 'domain_role.json.j2') }}"
+    body_format: json
+    return_content: yes
+    status_code: 204
+  no_log: yes
+  run_once: yes
+
+- name: Request certificate bundle
+  uri:
+    url: "https://{{ vault_addr }}:{{ vault_port }}/v1/pki_int/issue/{{ common_name | replace('.', '-dot-') }}"
+    validate_certs: no
+    method: POST
+    headers:
+      X-Vault-Token: "{{ pki_token['json']['auth']['client_token'] }}"
+    body: "{{ lookup('template', 'domain_request.json.j2') }}"
+    body_format: json
+    return_content: yes
+    status_code: 200
+  no_log: yes
+  register: domain_cert_bundle
+  run_once: yes
+
