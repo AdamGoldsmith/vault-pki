@@ -209,3 +209,8 @@
   register: domain_cert_bundle
   run_once: yes
 
+- name: Show certificate bundle
+  debug:
+    var: domain_cert_bundle
+  run_once: yes
+
